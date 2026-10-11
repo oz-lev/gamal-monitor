@@ -695,12 +695,26 @@ function markNew(){
 function safeReportUrl(value){
   try{const u=new URL(value);return /^https?:$/.test(u.protocol)?esc(u.href):'#';}catch(e){return '#';}
 }
+let REPORT_EPOCH=0, SITREP_EPOCH=0;
+async function reportJson(url){
+  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),20000);
+  try{const r=await fetch(url,{signal:ac.signal});if(!r.ok)throw new Error('HTTP '+r.status);return await r.json();}
+  finally{clearTimeout(timer);}
+}
 async function loadGdelt(){
-  const r = await fetch('/api/report'); const d = await r.json();
+  const epoch=++REPORT_EPOCH;
+  try{
+  const d=await reportJson('/api/report');if(epoch!==REPORT_EPOCH)return;
   document.getElementById('rlines').innerHTML = d.lines.map(l=>`<div class="line">${esc(l)}</div>`).join('');
   document.getElementById('rhot').innerHTML = '<tr><th>מיקום</th><th>אירועים</th><th>אזכורים</th><th>טון ממוצע</th></tr>'+d.hotspots.map(h=>`<tr><td>${esc(h.place)}</td><td class="mono">${h.n}</td><td class="mono">${h.ment}</td><td class="mono" style="color:${h.tone<-3?'var(--red)':'var(--dim)'}">${h.tone}</td></tr>`).join('');
   document.getElementById('rnot').innerHTML = '<tr><th>אירוע</th><th>קטגוריה</th><th>אזכורים</th><th></th></tr>'+d.notable.map(n=>`<tr><td>${esc(n.place||'—')} <span style="color:var(--dim);font-size:12px">${esc([n.a1,n.a2].filter(Boolean).join(' ←→ '))}</span><div class="mono" style="font-size:11px;color:var(--dim)">${esc(n.t)}</div></td><td><span class="chip" style="background:${CATCOL[n.cat]}">${esc(n.catHe)}</span></td><td class="mono">${n.ment}</td><td>${n.url?`<a href="${safeReportUrl(n.url)}" target="_blank" rel="noopener" style="color:var(--blue)">מקור ↗</a>`:''}</td></tr>`).join('');
   document.getElementById('rdisc').textContent = d.disclaimer;
+  }catch(e){
+    if(epoch!==REPORT_EPOCH)return;
+    document.getElementById('rlines').textContent='דוח GDELT לא נטען. נסה לרענן; אין כאן אישור שאין אירועים.';
+    document.getElementById('rhot').textContent='';document.getElementById('rnot').textContent='';
+    document.getElementById('rdisc').textContent='לא מוצג דוח עדכני.';
+  }
 }
 
 let SR_TH = 'all';
@@ -708,13 +722,13 @@ const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&
 function srItem(c){
   const cls = c.burst ? 'burst' : c.tier;
   const ago = c.age==null?'':(c.age<60?c.age+' דק׳':Math.floor(c.age/60)+' שע׳ '+(c.age%60)+' דק׳');
-  return `<div class="it ${cls}"><span class="badge ${c.tier}">${esc(c.tierHe)}</span>${c.burst?'<span class="badge burst">מתפרץ</span>':''}${c.claim?'<span class="badge claim">טענה, לא עובדה</span>':''}<span dir="auto">${esc(c.title)}</span><div class="meta">לפני ${ago} · ${c.n>1?c.n+' דיווחים · ':''}<bdi>${esc(c.srcs.join(", "))}</bdi> · <span title="${esc(c.why)}">למה הדירוג?</span><br>${c.links.map(l=>`<a href="${esc(l.u)}" target="_blank" rel="noopener"><bdi>${esc(l.s)}</bdi> ↗</a>`).join('')}</div></div>`;
+  return `<div class="it ${cls}"><span class="badge ${c.tier}">${esc(c.tierHe)}</span>${c.burst?'<span class="badge burst">מתפרץ</span>':''}${c.claim?'<span class="badge claim">טענה, לא עובדה</span>':''}<span dir="auto">${esc(c.title)}</span><div class="meta">לפני ${ago} · ${c.n>1?c.n+' דיווחים · ':''}<bdi>${esc(c.srcs.join(", "))}</bdi> · <span title="${esc(c.why)}">למה הדירוג?</span><br>${c.links.map(l=>`<a href="${safeReportUrl(l.u)}" target="_blank" rel="noopener"><bdi>${esc(l.s)}</bdi> ↗</a>`).join('')}</div></div>`;
 }
 function srSec(name, arr, sub){ return arr.length ? `<div class="sec"><h4>${name} <small>${arr.length}${sub?' · '+sub:''}</small></h4>${arr.map(srItem).join('')}</div>` : ''; }
 async function loadSitrep(){
-  const box = document.getElementById('sitrep');
+  const box = document.getElementById('sitrep'),epoch=++SITREP_EPOCH,theater=SR_TH;
   try{
-    const r = await fetch('/api/sitrep?theater='+SR_TH); const d = await r.json();
+    const d=await reportJson('/api/sitrep?theater='+encodeURIComponent(theater));if(epoch!==SITREP_EPOCH)return;
     document.getElementById('rtabs').innerHTML = d.theaters.map(t=>`<button class="tab ${t.id===SR_TH?'on':''}" data-t="${t.id}">${esc(t.he)}</button>`).join('');
     document.querySelectorAll('#rtabs .tab').forEach(b=>b.onclick=()=>{SR_TH=b.dataset.t; loadSitrep();});
     const stale = d.fastAge!=null && d.fastAge>10 ? ` · <b style="color:var(--orange)">סריקת המבזקים האחרונה לפני ${d.fastAge} דק׳</b>` : '';
@@ -724,7 +738,11 @@ async function loadSitrep(){
       + `<div class="sec"><h4>מעקב 24-72 שעות <small>נגזר מהנתונים, לא תחזית</small></h4>${d.watch.map(w=>`<div class="it">${esc(w)}</div>`).join('')}</div>`
       + `<div class="rules">${esc(d.rules)}<br><b>מודל עזר:</b> ${d.llm.enabled?(d.llm.exhausted?'מכסת היום נגמרה, דירוג לפי כללים בלבד':'פעיל · '+d.llm.usedToday+' מתוך '+d.llm.budget+' נוירונים היום · '+d.llm.calls+' קריאות'+(d.llm.errors?' · '+d.llm.errors+' שגיאות':'')):'כבוי, דירוג לפי כללים בלבד'} (המודל מאחד ידיעות בין שפות ומסווג טענה/עובדה. הוא לא מעלה דירוג ולא מאמת.)</div><div class="gaps">${esc(d.gaps)}<br>${esc(d.disclaimer)}</div>`;
     if(!d.breaking.length && !d.verified.length && !d.probable.length && !d.initial.length) box.innerHTML = '<div class="line">אין כרגע דיווחים רלוונטיים בזירה הזו ב-72 השעות האחרונות במקורות שלנו.</div>'+box.innerHTML;
-  }catch(e){ box.innerHTML = '<div class="line">שגיאה בטעינת הדוח. נסה לרענן.</div>'; }
+  }catch(e){
+    if(epoch!==SITREP_EPOCH)return;
+    document.getElementById('rgen').textContent='לא מוצג דוח עדכני לזירה שבחרת.';
+    box.innerHTML='<div class="line">שגיאה בטעינת הדוח. נסה לרענן. השגיאה אינה אישור שאין אירועים.</div>';
+  }
 }
 document.getElementById('reportbtn').onclick = ()=>openReport(true);
 document.getElementById('rrefresh').onclick = ()=>{ loadSitrep(); loadGdelt(); };
