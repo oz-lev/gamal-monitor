@@ -746,11 +746,30 @@ async function loadSitrep(){
 }
 document.getElementById('reportbtn').onclick = ()=>openReport(true);
 document.getElementById('rrefresh').onclick = ()=>{ loadSitrep(); loadGdelt(); };
-document.getElementById('rcopy').onclick = async ()=>{
-  const b = document.getElementById('rcopy');
-  try{ const t = await (await fetch('/api/sitrep?format=text&theater='+SR_TH)).text(); await navigator.clipboard.writeText(t); b.textContent='הועתק'; }catch(e){ b.textContent='ההעתקה נכשלה'; }
-  setTimeout(()=>b.textContent='העתק כטקסט',2000);
-};
+let COPY_EPOCH=0,COPY_RESET=null;
+async function copySitrep(){
+  const b=document.getElementById('rcopy'),epoch=++COPY_EPOCH,theater=SR_TH,viewEpoch=SITREP_EPOCH;
+  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),20000);
+  if(COPY_RESET)clearTimeout(COPY_RESET);
+  b.disabled=true;b.textContent='מכין טקסט…';
+  try{
+    const r=await fetch('/api/sitrep?format=text&theater='+encodeURIComponent(theater),{signal:ac.signal});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    if(!/^text\/plain(?:;|$)/i.test(r.headers.get('content-type')||''))throw new Error('Unexpected report type');
+    const t=await r.text();
+    if(!t.trim())throw new Error('Empty report');
+    if(epoch!==COPY_EPOCH)return;
+    if(theater!==SR_TH||viewEpoch!==SITREP_EPOCH){b.textContent='הזירה השתנתה · העתק שוב';return;}
+    await navigator.clipboard.writeText(t);
+    if(epoch!==COPY_EPOCH)return;
+    b.textContent=theater===SR_TH&&viewEpoch===SITREP_EPOCH?'הועתק':'הועתק הדוח הקודם · העתק שוב';
+  }catch(e){if(epoch===COPY_EPOCH)b.textContent='ההעתקה נכשלה · נסה שוב';}
+  finally{
+    clearTimeout(timer);
+    if(epoch===COPY_EPOCH){b.disabled=false;COPY_RESET=setTimeout(()=>{if(epoch===COPY_EPOCH)b.textContent='העתק כטקסט';},3000);}
+  }
+}
+document.getElementById('rcopy').onclick=copySitrep;
 document.getElementById('close').onclick = ()=> closeReport();
 document.getElementById('sndbtn').textContent = SND_ON ? '🔊' : '🔇';
 document.getElementById('sndbtn').onclick = ()=>{
